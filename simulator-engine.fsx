@@ -19,7 +19,7 @@ let configuration =
             }
             remote {
                 helios.tcp {
-                    port = 7887
+                    port = 8088
                     hostname = localhost
                 }
             }
@@ -74,14 +74,14 @@ type ClientNode() =
             numClients <-msg.NumClients
             isUserOffline <- msg.IsUserOffline
 
-            let server = system.ActorSelection("akka.tcp://RemoteFSharp@localhost:8778/user/Server")
+            let server = system.ActorSelection("akka.tcp://RemoteFSharp@localhost:8087/user/Server")
             
             // To register User
             server.Tell { UserId = actorVal; } 
 
         | :? AddFollower as msg ->
             let userId = msg.FollowerId
-            let server = system.ActorSelection("akka.tcp://RemoteFSharp@localhost:8778/user/Server")
+            let server = system.ActorSelection("akka.tcp://RemoteFSharp@localhost:8087/user/Server")
             server.Tell { SelfId = actorVal; UserId = userId; }
 
         | :? Utils.RegistrationConfirmation as msg ->
@@ -91,7 +91,7 @@ type ClientNode() =
             let nextRandNum = random.Next(10)
             if (nextRandNum = 6 && msg.IsRetweet = false) then
                noOfRetweets <- noOfRetweets + 1
-               let server = system.ActorSelection("akka.tcp://RemoteFSharp@localhost:8778/user/Server")
+               let server = system.ActorSelection("akka.tcp://RemoteFSharp@localhost:8087/user/Server")
                server.Tell { UserId = actorVal; Tweet = msg.Tweet; IsRetweet = true }
 
         | :? Utils.AcknowledgementOfTweet as msg ->
@@ -101,7 +101,7 @@ type ClientNode() =
         | :? SimulateTweet as msg ->
             // Simulate tweeting ifuser is active
             if noOfTweets <> 0 && isUserOffline = false then
-                let server = system.ActorSelection("akka.tcp://RemoteFSharp@localhost:8778/user/Server")
+                let server = system.ActorSelection("akka.tcp://RemoteFSharp@localhost:8087/user/Server")
 
                 let mutable tweet = ("tweet_" + string(noOfTweets))
 
@@ -117,10 +117,10 @@ type ClientNode() =
                 noOfTweets <- noOfTweets - 1 
             else
                 if isUserOffline = true then
-                    let server = system.ActorSelection("akka.tcp://RemoteFSharp@localhost:8778/user/Server")
+                    let server = system.ActorSelection("akka.tcp://RemoteFSharp@localhost:8087/user/Server")
                     server.Tell {IsUserInactive = actorVal}
 
-                let clientManager = system.ActorSelection("akka.tcp://RemoteFSharp@localhost:7887/user/SimulatorNode")
+                let clientManager = system.ActorSelection("akka.tcp://RemoteFSharp@localhost:8088/user/SimulatorNode")
 
                 clientManager.Tell { ClientCompleted = true }
 
@@ -218,7 +218,7 @@ type SimulatorNode() =
                     let newRandom = new Random()
                     let follower = newRandom.Next(1, msg.NumClients+1)
                     if id <> follower then
-                        let followerRef = system.ActorSelection("akka.tcp://RemoteFSharp@localhost:7887/user/"+string(follower))
+                        let followerRef = system.ActorSelection("akka.tcp://RemoteFSharp@localhost:8088/user/"+string(follower))
                         followerRef.Tell { FollowerId = id; }
 
             printfn "--------------------------------------------------------------------"
@@ -231,13 +231,13 @@ type SimulatorNode() =
             startTime <- System.DateTime.Now.TimeOfDay.TotalMilliseconds
 
             for id in 1 .. msg.NumClients do
-                let selfActorRef = system.ActorSelection("akka.tcp://RemoteFSharp@localhost:7887/user/"+string(id))
+                let selfActorRef = system.ActorSelection("akka.tcp://RemoteFSharp@localhost:8088/user/"+string(id))
                 selfActorRef.Tell { ShouldSimulateTweet = true;  }
 
         | :? HandleFinishedActorState as msg ->
             noOfFinishedActors <- noOfFinishedActors + 1
             if noOfFinishedActors = numClients then
-                let server = system.ActorSelection("akka.tcp://RemoteFSharp@localhost:8778/user/Server")
+                let server = system.ActorSelection("akka.tcp://RemoteFSharp@localhost:8087/user/Server")
                 server.Tell { Tweet = "FINISHED"; UserId = -1; IsRetweet = false}
 
         | :? Utils.AcknowledgementOfTweet as msg ->

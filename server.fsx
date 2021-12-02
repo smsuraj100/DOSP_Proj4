@@ -3,11 +3,9 @@
 #r "nuget: Akka.Remote"
 
 open Utils
-open System
 open Akka.Actor
 open Akka.Configuration
 open Akka.FSharp
-open Akka.Remote
 open System.Collections.Generic
 
 let args = System.Environment.GetCommandLineArgs()
@@ -20,7 +18,7 @@ let configuration =
             }
             remote {
                 helios.tcp {
-                    port = 8778
+                    port = 8087
                     hostname = localhost
                 }
             }
@@ -112,7 +110,7 @@ type Server() =
 
                 for follower in listOfFollowers.Item(userId) do
                     if listOfRegisteredUsers.Item(follower) = 1 then
-                        let actorRef = system.ActorSelection("akka.tcp://RemoteFSharp@localhost:7887/user/" + string(follower))
+                        let actorRef = system.ActorSelection("akka.tcp://RemoteFSharp@localhost:8088/user/" + string(follower))
                         actorRef.Tell {FollowerId = userId; Tweet = tweet; IsRetweet = isRetweet }
 
                 x.Sender.Tell { IsTweetAcknowledged = true; IsRetweet = isRetweet; }
