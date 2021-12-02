@@ -195,7 +195,7 @@ type ClientManager() =
             printfn "No. of normal user's tweets %d" normalUserTweets
             printfn "--------------------------------------------------------------------"
 
-            // To reate zipf follow pattern
+            // To create zipf, we followed below pattern
             // celebrity's follower count - 40 to 50% of total users
             // influencer's follower count - 8 to 10% of total users
             // normal user's follower count - 1 to 3% of total users
