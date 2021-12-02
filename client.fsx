@@ -11,21 +11,13 @@ open Akka.FSharp
 
 let args = System.Environment.GetCommandLineArgs()
 
+printfn "args array -------------> %A" args
+
 let configuration = 
     ConfigurationFactory.ParseString(
-        @"akka {
-            log-config-on-start : on
-            stdout-loglevel : DEBUG
-            loglevel : ERROR
+        @"akka {            
             actor {
-                provider = ""Akka.Remote.RemoteActorRefProvider, Akka.Remote""
-                debug : {
-                    receive : on
-                    autoreceive : on
-                    lifecycle : on
-                    event-stream : on
-                    unhandled : on
-                }
+                provider = ""Akka.Remote.RemoteActorRefProvider, Akka.Remote""                
             }
             remote {
                 helios.tcp {
@@ -36,196 +28,239 @@ let configuration =
         }")
 
 let system = ActorSystem.Create("RemoteFSharp", configuration)
-let mutable retweetsCount = 0
-let mutable disConnectedUsers = 0
 
-type ClientManagerInitMessage = {
+let mutable noOfRetweets = 0
+let mutable noOfInactiveUsers = 0
+let random = Random()
+
+type InitClientEngineNode = {
     NumClients: int;
 } 
 
-type ClientInitMessage = {
+type InitSimulator = {
     MyId: int;
     MyTweetCount: int;
     NumClients: int;
-    Disconnect: bool;
+    IsUserOffline: bool;
 }
 
-type ClientCompletionMessage = {
+type HandleFinishedActorState = {
     ClientCompleted: bool;
 }
 
-type ForceFollowUser = {
-    ForceFollowUserId: int;
+type AddFollower = {
+    FollowerId: int;
 }
 
-type ClientManagerCompletionMessage = {
-    ClientManagerCompleted: bool;
+type FinishedClientEngineState = {
+    IsClientEngineFinished: bool;
 }
 
-type SimulateTweetMessage = {
-    SimulateTweet: bool;
+type SimulateTweet = {
+    ShouldSimulateTweet: bool;
 }
 
-type PopularityTeller = {
-    Popularity: string;
-}
-
-type Client() = 
+type SimulatorNode() = 
     inherit Actor()
-    let mutable myId = 0
-    let mutable myTweetCount = 0
+
+    let mutable actorVal = 0
+    let mutable noOfTweets = 0
     let mutable numClients = 0
-    let mutable onePercent = 0
-    let mutable disconnect = false
+    let mutable isUserOffline = false
+
     override x.OnReceive (message:obj) =
         match message with
-        | :? ClientInitMessage as msg ->
-            myId <- msg.MyId
-            myTweetCount <- msg.MyTweetCount
+        | :? InitSimulator as msg ->
+            actorVal <- msg.MyId
+            noOfTweets <- msg.MyTweetCount
             numClients <-msg.NumClients
-            disconnect <- msg.Disconnect
+            isUserOffline <- msg.IsUserOffline
+
             let server = system.ActorSelection("akka.tcp://RemoteFSharp@localhost:8778/user/Server")
-            server.Tell { UserId = myId; } // Registering account
-        | :? ForceFollowUser as msg ->
-            let userId = msg.ForceFollowUserId
+            
+            // To register User
+            server.Tell { UserId = actorVal; } 
+
+        | :? AddFollower as msg ->
+            let userId = msg.FollowerId
             let server = system.ActorSelection("akka.tcp://RemoteFSharp@localhost:8778/user/Server")
-            server.Tell { SelfId = myId; UserId = userId; }
+            server.Tell { SelfId = actorVal; UserId = userId; }
+
         | :? Utils.RegistrationConfirmation as msg ->
-            printfn "Registration Successful for user: user%d" myId
+            printfn "User%d successsfully registered !!!" actorVal
+
         | :? Utils.UpdateUserFeed as msg ->
-            let random = new Random()
-            let randomNumber = random.Next(10)
-            if (randomNumber = 6 && msg.IsRetweet = false) then
-               retweetsCount <- retweetsCount + 1
+            let nextRandNum = random.Next(10)
+            if (nextRandNum = 6 && msg.IsRetweet = false) then
+               noOfRetweets <- noOfRetweets + 1
                let server = system.ActorSelection("akka.tcp://RemoteFSharp@localhost:8778/user/Server")
-               server.Tell { UserId = myId; Tweet = msg.Tweet; IsRetweet=true }
+               server.Tell { UserId = actorVal; Tweet = msg.Tweet; IsRetweet = true }
+
         | :? Utils.AcknowledgementOfTweet as msg ->
             if msg.IsRetweet = false then
-                x.Self.Tell { SimulateTweet = true }
-        | :? SimulateTweetMessage as msg ->
-            if myTweetCount <> 0 && disconnect = false then
-                let random = new Random()
+                x.Self.Tell { ShouldSimulateTweet = true }
+
+        | :? SimulateTweet as msg ->
+            // Simulate tweeting ifuser is active
+            if noOfTweets <> 0 && isUserOffline = false then
                 let server = system.ActorSelection("akka.tcp://RemoteFSharp@localhost:8778/user/Server")
-                let mutable tweet = ("tweet_" + string(myTweetCount))
+
+                let mutable tweet = ("tweet_" + string(noOfTweets))
+
+                // Add mentions and hastags randomly
                 if random.Next(2) = 1 then
-                    tweet <- (tweet + "@" + string(random.Next(1,numClients+1)))
+                    tweet <- (tweet + "@" + string(random.Next(1, numClients + 1)))
+
                 if random.Next(2) = 1 then
                     tweet <- (tweet + "#" + string(random.Next(1,10)))
-                server.Tell { UserId = myId; Tweet = tweet; IsRetweet=false }
-                myTweetCount <- myTweetCount - 1 
+
+                server.Tell { UserId = actorVal; Tweet = tweet; IsRetweet = false }
+
+                noOfTweets <- noOfTweets - 1 
             else
-                if disconnect = true then
+                if isUserOffline = true then
                     let server = system.ActorSelection("akka.tcp://RemoteFSharp@localhost:8778/user/Server")
-                    server.Tell {IsUserInactive = myId}
+                    server.Tell {IsUserInactive = actorVal}
+
                 let clientManager = system.ActorSelection("akka.tcp://RemoteFSharp@localhost:7887/user/ClientManager")
+
                 clientManager.Tell { ClientCompleted = true }
-        | _ -> printfn "ERROR WHILE PARSING MESSAGE"
+
+        | _ -> printfn "Invalid Message !!!"
         
 type ClientManager() =
     inherit Actor()
-    let mutable originalSender = null
+
+    let mutable sender = null
     let mutable numClients = 0
-    let mutable completedClients = 0
+    let mutable noOfFinishedActors = 0
     let mutable startTime = 0.0
     let mutable endTime = 0.0
-    let mutable totalTweets = 0
+    let mutable totalTweetCount = 0
+
     override x.OnReceive (message:obj) =   
         match message with
-        | :? ClientManagerInitMessage as msg ->
-            originalSender <- x.Sender
+        | :? InitClientEngineNode as msg ->
+            sender <- x.Sender
             numClients <- msg.NumClients
-            // high profile user count - 0.1 % of total users
-            // medium profile user count - 5% of total users
-            // low profile user count - rest of the users
-            let highProfileUserEnd = int(0.001 * float(numClients))
-            let midProfileUserEnd = int(0.05 * float(numClients))
+
+            // No. of celebrities  - 0.5 % of total users
+            let noOfCelebrities = int(0.005 * float(numClients))
+
+            // No. of influencers - 5% of total users
+            let noOfInfluencers = int(0.05 * float(numClients))
+
+            printfn "--------------------------------------------------------------------"
             printfn "Total user count: %d" numClients
-            printfn "High profile user count: %d" highProfileUserEnd
-            printfn "Medium profile user count: %d" (midProfileUserEnd - highProfileUserEnd)
-            printfn "Low profile user count: %d" (numClients - midProfileUserEnd)
-            let mutable highProfileUserTweets = 0
-            let mutable mediumProfileUserTweets = 0
-            let mutable lowProfileUserTweets = 0
-            for id in 1 .. numClients do // creating users here and giving tweet counts
-                let random = new Random()
-                let actor = system.ActorOf(Props(typedefof<Client>), string(id))
+            printfn "No. of celebrities: %d" noOfCelebrities
+            printfn "No. of influencers: %d" (noOfInfluencers - noOfCelebrities)
+            printfn "No. of normal users: %d" (numClients - noOfInfluencers)
+            printfn "--------------------------------------------------------------------"
+
+            let mutable celebrityTweets = 0
+            let mutable influencerTweets = 0
+            let mutable normalUserTweets = 0
+
+            for id in 1 .. numClients do              
+                let actor = system.ActorOf(Props(typedefof<SimulatorNode>), string(id))
+
                 let mutable numTweets = 0
-                if id <= highProfileUserEnd then
-                    numTweets <- random.Next(20) + 50
-                    highProfileUserTweets <- highProfileUserTweets + numTweets
-                else if id <= midProfileUserEnd then
-                    numTweets <- random.Next(15) + 15
-                    mediumProfileUserTweets <- mediumProfileUserTweets + numTweets
+
+                if id <= noOfCelebrities then
+                    numTweets <- random.Next(20) + 40
+                    celebrityTweets <- celebrityTweets + numTweets
+                else if id <= noOfInfluencers then
+                    numTweets <- random.Next(10) + 20
+                    influencerTweets <- influencerTweets + numTweets
                 else
                     numTweets <- random.Next(10)
-                    lowProfileUserTweets <- lowProfileUserTweets + numTweets
-                let mutable disconnect = false // 10% disconnect
-                if (random.Next(10) = 3) then
-                    disconnect <- true
-                    disConnectedUsers <- disConnectedUsers + 1
-                actor.Tell { MyId = id; MyTweetCount = numTweets; NumClients = numClients; Disconnect = disconnect; }
-            totalTweets <- (highProfileUserTweets + mediumProfileUserTweets + lowProfileUserTweets)
-            printfn "Total Disconnected Users: %d" disConnectedUsers
-            printfn "Total tweets: %d" totalTweets
-            printfn "High profile user tweets %d" highProfileUserTweets
-            printfn "Medium profile user tweets %d" mediumProfileUserTweets
-            printfn "Low profile user tweets %d" lowProfileUserTweets
-            printfn "Waiting to complete ..."
-            // all users initialized. create zipf follow pattern
-            // high profile user follower count - 30 to 50% of total users
-            // medium profile user follower count - 1 to 10% of total users
-            // low profile user follower count - 0.05 to 0.1% of total users
-            let mutable highProfileTotalFollowers = 0
-            let mutable mediumProfileTotalFollowers = 0
-            let mutable lowProfileTotalFollowers = 0
+                    normalUserTweets <- normalUserTweets + numTweets
+
+                // Inactivate user (0 to 10% of total users)
+                let mutable isUserOffline = false 
+
+                if (random.Next(10) = 4) then
+                    isUserOffline <- true
+                    noOfInactiveUsers <- noOfInactiveUsers + 1
+
+                actor.Tell { MyId = id; MyTweetCount = numTweets; NumClients = numClients; IsUserOffline = isUserOffline; }
+
+            totalTweetCount <- (celebrityTweets + influencerTweets + normalUserTweets)
+
+            printfn "--------------------------------------------------------------------"
+            printfn "Total Inactive Users: %d" noOfInactiveUsers
+            printfn "Total no. of tweets: %d" totalTweetCount
+            printfn "No. of celebrity's tweets %d" celebrityTweets
+            printfn "No. of influencers's tweets %d" influencerTweets
+            printfn "No. of normal user's tweets %d" normalUserTweets
+            printfn "--------------------------------------------------------------------"
+
+            // To reate zipf follow pattern
+            // celebrity's follower count - 40 to 50% of total users
+            // influencer's follower count - 8 to 10% of total users
+            // normal user's follower count - 1 to 3% of total users
+            let mutable celebrityFollowerCount = 0
+            let mutable influencerFollowerCount = 0
+            let mutable normalUserFollowerCount = 0
+
             for id in 1 .. numClients do
-                let random = new Random()
-                let mutable followersNeeded = 0
-                if id <= highProfileUserEnd then
-                    followersNeeded <- int(float(random.Next(200) + 300) * 0.001 * float(msg.NumClients))
-                    highProfileTotalFollowers <- highProfileTotalFollowers + followersNeeded
-                else if id <= midProfileUserEnd then
-                    followersNeeded <- int(float(random.Next(900) + 100) * 0.0001 * float(msg.NumClients))
-                    mediumProfileTotalFollowers <- mediumProfileTotalFollowers + followersNeeded
+                let mutable noOfFollowersAssigned = 0
+
+                if id <= noOfCelebrities then
+                    noOfFollowersAssigned <- int(float(random.Next(200) + 400) * 0.001 * float(msg.NumClients))
+                    celebrityFollowerCount <- celebrityFollowerCount + noOfFollowersAssigned
+                else if id <= noOfInfluencers then
+                    noOfFollowersAssigned <- int(float(random.Next(200) + 800) * 0.0001 * float(msg.NumClients))
+                    influencerFollowerCount <- influencerFollowerCount + noOfFollowersAssigned
                 else
-                    followersNeeded <- int(float(random.Next(500) + 500) * 0.000001 * float(msg.NumClients))
-                    lowProfileTotalFollowers <- lowProfileTotalFollowers + followersNeeded
-                for count in 1 .. followersNeeded do
+                    noOfFollowersAssigned <- int(float(random.Next(200) + 100) * 0.0001 * float(msg.NumClients))
+                    normalUserFollowerCount <- normalUserFollowerCount + noOfFollowersAssigned
+
+                for ele in 1 .. noOfFollowersAssigned do
                     let newRandom = new Random()
                     let follower = newRandom.Next(1, msg.NumClients+1)
                     if id <> follower then
                         let followerRef = system.ActorSelection("akka.tcp://RemoteFSharp@localhost:7887/user/"+string(follower))
-                        followerRef.Tell { ForceFollowUserId = id; }
-            printfn "Total followers for all users: %d" (highProfileTotalFollowers + mediumProfileTotalFollowers + lowProfileTotalFollowers)
-            printfn "High profile total follower count: %d" highProfileTotalFollowers
-            printfn "Medium profile total follower count: %d" mediumProfileTotalFollowers
-            printfn "Low profile total follower count: %d" lowProfileTotalFollowers
+                        followerRef.Tell { FollowerId = id; }
+
+            printfn "--------------------------------------------------------------------"
+            printfn "Total no. of followers for all users: %d" (celebrityFollowerCount + influencerFollowerCount + normalUserFollowerCount)
+            printfn "Total no. of followers of all celebrities: %d" celebrityFollowerCount
+            printfn "Total no. of followers of all influencers: %d" influencerFollowerCount
+            printfn "Total no. of followers of all normal users: %d" normalUserFollowerCount
+            printfn "--------------------------------------------------------------------"
+
             startTime <- System.DateTime.Now.TimeOfDay.TotalMilliseconds
+
             for id in 1 .. msg.NumClients do
-                let myRef = system.ActorSelection("akka.tcp://RemoteFSharp@localhost:7887/user/"+string(id))
-                myRef.Tell { SimulateTweet = true;  }
-        | :? ClientCompletionMessage as msg ->
-            completedClients <- completedClients + 1
-            if completedClients = numClients then
-                printfn "Tweeting Completed."
+                let selfActorRef = system.ActorSelection("akka.tcp://RemoteFSharp@localhost:7887/user/"+string(id))
+                selfActorRef.Tell { ShouldSimulateTweet = true;  }
+
+        | :? HandleFinishedActorState as msg ->
+            noOfFinishedActors <- noOfFinishedActors + 1
+            if noOfFinishedActors = numClients then
                 let server = system.ActorSelection("akka.tcp://RemoteFSharp@localhost:8778/user/Server")
-                server.Tell { Tweet = "FINISHED"; UserId = -1; IsRetweet=false}
-                //originalSender.Tell { ClientManagerCompleted = true }
-                //x.Self.Tell(PoisonPill.Instance)
+                server.Tell { Tweet = "FINISHED"; UserId = -1; IsRetweet = false}
+
         | :? Utils.AcknowledgementOfTweet as msg ->
-            printfn "Completed"
             endTime <- System.DateTime.Now.TimeOfDay.TotalMilliseconds
             let timeTaken = (endTime - startTime)
+
+            printfn "--------------------------------------------------------------------"
             printfn "Time taken: %f" timeTaken
-            printfn "Total original tweets: %d" totalTweets
-            printfn "Total retweets: %d" retweetsCount
-            printfn "Total tweets: %d" (totalTweets + retweetsCount)
-            printfn "Tweets per second: %d" (int(float((retweetsCount+totalTweets)*1000)/timeTaken))
-            originalSender.Tell { ClientManagerCompleted = true }
+            printfn "No. of original tweets: %d" totalTweetCount
+            printfn "No. of retweets: %d" noOfRetweets
+            printfn "Total tweets: %d" (totalTweetCount + noOfRetweets)
+            printfn "Tweets per second: %d" (int(float((noOfRetweets+totalTweetCount)*1000)/timeTaken))
+            printfn "--------------------------------------------------------------------"
+
+            sender.Tell { IsClientEngineFinished = true }
+
             x.Self.Tell(PoisonPill.Instance)
-        | _ -> printfn "ERROR WHILE PARSING MESSAGE"
+
+        | _ -> printfn "Invalid Message !!!"
 
 let server = system.ActorOf(Props(typedefof<ClientManager>), "ClientManager")
-let (task:Async<ClientManagerCompletionMessage>) = ( server <? { NumClients = 1000; })
+let (task:Async<FinishedClientEngineState>) = ( server <? { NumClients = args.[2] |> int; })
 let response = Async.RunSynchronously (task)
 server.Tell(PoisonPill.Instance)
