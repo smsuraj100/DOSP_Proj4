@@ -11,8 +11,6 @@ open Akka.FSharp
 
 let args = System.Environment.GetCommandLineArgs()
 
-printfn "args array -------------> %A" args
-
 let configuration = 
     ConfigurationFactory.ParseString(
         @"akka {            
@@ -60,7 +58,7 @@ type SimulateTweet = {
     ShouldSimulateTweet: bool;
 }
 
-type SimulatorNode() = 
+type ClientNode() = 
     inherit Actor()
 
     let mutable actorVal = 0
@@ -122,13 +120,13 @@ type SimulatorNode() =
                     let server = system.ActorSelection("akka.tcp://RemoteFSharp@localhost:8778/user/Server")
                     server.Tell {IsUserInactive = actorVal}
 
-                let clientManager = system.ActorSelection("akka.tcp://RemoteFSharp@localhost:7887/user/ClientManager")
+                let clientManager = system.ActorSelection("akka.tcp://RemoteFSharp@localhost:7887/user/SimulatorNode")
 
                 clientManager.Tell { ClientCompleted = true }
 
         | _ -> printfn "Invalid Message !!!"
         
-type ClientManager() =
+type SimulatorNode() =
     inherit Actor()
 
     let mutable sender = null
@@ -162,7 +160,7 @@ type ClientManager() =
             let mutable normalUserTweets = 0
 
             for id in 1 .. numClients do              
-                let actor = system.ActorOf(Props(typedefof<SimulatorNode>), string(id))
+                let actor = system.ActorOf(Props(typedefof<ClientNode>), string(id))
 
                 let mutable numTweets = 0
 
@@ -260,7 +258,7 @@ type ClientManager() =
 
         | _ -> printfn "Invalid Message !!!"
 
-let server = system.ActorOf(Props(typedefof<ClientManager>), "ClientManager")
+let server = system.ActorOf(Props(typedefof<SimulatorNode>), "SimulatorNode")
 let (task:Async<FinishedClientEngineState>) = ( server <? { NumClients = args.[2] |> int; })
 let response = Async.RunSynchronously (task)
 server.Tell(PoisonPill.Instance)
